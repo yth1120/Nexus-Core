@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Build error dumps
+_c.err.txt
+_check.err.txt
+
+# Local AI tool configs
+.claude/
+.codex/
+.impeccable/
+.agents/
+
+# macOS
+*.dmg
+.DocumentRevisions-V100
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+
+# Linux
+.AppImage
+*.deb

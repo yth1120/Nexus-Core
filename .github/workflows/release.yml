@@ -1,0 +1,270 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v2.4.1)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # =========================================================================
+  # Build Tauri application for all platforms
+  # =========================================================================
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Windows ---
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+            ext: .exe
+            installer-ext: .msi
+            rust-target: x86_64-pc-windows-msvc
+
+          # --- macOS Intel ---
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: darwin-x86_64
+            ext: ''
+            installer-ext: .dmg
+            rust-target: x86_64-apple-darwin
+
+          # --- macOS Apple Silicon ---
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: darwin-aarch64
+            ext: ''
+            installer-ext: .dmg
+            rust-target: aarch64-apple-darwin
+
+          # --- Linux ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+            ext: ''
+            installer-ext: .AppImage
+            rust-target: x86_64-unknown-linux-gnu
+
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY || '' }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----- Rust toolchain -----
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      # ----- Node.js -----
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # ----- Platform dependencies -----
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libappindicator3-dev \
+            patchelf
+
+      # ----- Cache -----
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: release-${{ matrix.label }}
+
+      # ----- Frontend -----
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      # ----- Tauri CLI -----
+      - name: Install Tauri CLI
+        run: npm install --save-dev @tauri-apps/cli@^2
+
+      # ----- macOS code signing (conditional) -----
+      - name: Import macOS code signing certificate
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || '' }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain
+
+      # ----- Windows code signing (conditional) -----
+      - name: Setup Windows code signing
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          echo "$env:WINDOWS_CERTIFICATE" | Out-File -Encoding Ascii certificate.txt
+          certutil -decode certificate.txt certificate.pfx
+
+      # ----- Build Tauri (release) -----
+      - name: Build Tauri application
+        run: npx tauri build --target ${{ matrix.rust-target }}
+        env:
+          # Pass signing secrets to Tauri if available
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+
+      # ----- Collect artifacts -----
+      - name: Collect binaries for packaging
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Binary
+            cp src-tauri/target/${{ matrix.rust-target }}/release/nexus-core.exe \
+               release-artifacts/nexus-core-${{ matrix.label }}.exe 2>/dev/null || true
+            # MSI installer
+            find src-tauri/target/${{ matrix.rust-target }}/release/bundle/msi/ \
+              -name "*.msi" -exec cp {} release-artifacts/ \; 2>/dev/null || true
+            # NSIS installer
+            find src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/ \
+              -name "*.exe" -exec cp {} release-artifacts/ \; 2>/dev/null || true
+
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            # Binary
+            cp src-tauri/target/${{ matrix.rust-target }}/release/nexus-core \
+               release-artifacts/nexus-core-${{ matrix.label }} 2>/dev/null || true
+            # DMG
+            find src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/ \
+              -name "*.dmg" -exec cp {} release-artifacts/ \; 2>/dev/null || true
+
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            # Binary
+            cp src-tauri/target/${{ matrix.rust-target }}/release/nexus-core \
+               release-artifacts/nexus-core-${{ matrix.label }} 2>/dev/null || true
+            # AppImage
+            find src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage/ \
+              -name "*.AppImage" -exec cp {} release-artifacts/ \; 2>/dev/null || true
+            # DEB
+            find src-tauri/target/${{ matrix.rust-target }}/release/bundle/deb/ \
+              -name "*.deb" -exec cp {} release-artifacts/ \; 2>/dev/null || true
+          fi
+
+      # ----- Generate SHA256 checksums -----
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          cd release-artifacts
+          sha256sum * > sha256sums-${{ matrix.label }}.txt
+          cat sha256sums-${{ matrix.label }}.txt
+
+      # ----- Upload workflow artifacts -----
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: release-artifacts/*
+          retention-days: 7
+
+  # =========================================================================
+  # Create GitHub Release
+  # =========================================================================
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Display artifact tree
+        run: find artifacts -type f -exec ls -lh {} \;
+
+      # ----- Changelog -----
+      - name: Generate changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.version }}}"
+          echo "## Nexus Core ${VERSION}" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          # Get previous tag
+          PREV_TAG=$(git tag --sort=-creatordate | grep -A1 "${VERSION}" | tail -1 || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "**Changes since ${PREV_TAG}:**" >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+            git log --oneline --no-merges "${PREV_TAG}..HEAD" | while read -r line; do
+              echo "- ${line}" >> RELEASE_NOTES.md
+            done
+          else
+            echo "Initial release." >> RELEASE_NOTES.md
+          fi
+
+          echo "" >> RELEASE_NOTES.md
+          echo "### Checksums" >> RELEASE_NOTES.md
+          echo 'See `sha256sums-*.txt` files attached to this release.' >> RELEASE_NOTES.md
+
+          cat RELEASE_NOTES.md
+
+      # ----- GitHub Release -----
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Nexus Core ${{ github.ref_name || github.event.inputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name || github.event.inputs.version, 'beta') || contains(github.ref_name || github.event.inputs.version, 'alpha') || contains(github.ref_name || github.event.inputs.version, 'rc') }}
+          fail_on_unmatched_files: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

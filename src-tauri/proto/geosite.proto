@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package geosite;
+
+// A single domain entry within a geosite category.
+message Domain {
+  // Type of matching: "domain" (exact), "full" (full match), "regex" (pattern).
+  string type = 1;
+
+  // The domain value (e.g. "google.com", "*.google.com").
+  string value = 2;
+}
+
+// A named category containing a list of domains.
+message GeoSite {
+  // Category tag, e.g. "google", "telegram", "netflix".
+  string tag = 1;
+
+  // Domains belonging to this category.
+  repeated Domain domain = 2;
+}
+
+// Top-level container for all geosite categories.
+message GeoSiteList {
+  repeated GeoSite entry = 1;
+}
