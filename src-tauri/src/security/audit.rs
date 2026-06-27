@@ -121,7 +121,7 @@ impl SecurityAuditor {
 
     /// Check file permissions on a directory (platform-specific).
     pub fn check_permissions(_dir: &Path) -> AppResult<Vec<PermissionIssue>> {
-        let issues = Vec::new();
+        let mut issues = Vec::new();
 
         // On Unix, check for world-writable files
         #[cfg(unix)]
