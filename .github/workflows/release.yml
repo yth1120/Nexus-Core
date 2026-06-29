@@ -140,24 +140,20 @@ jobs:
           echo "$env:WINDOWS_CERTIFICATE" | Out-File -Encoding Ascii certificate.txt
           certutil -decode certificate.txt certificate.pfx
 
-      # ----- Build Tauri (release) - macOS with signing -----
-      - name: Build Tauri application (signed)
-        if: runner.os != 'macOS' || secrets.APPLE_CERTIFICATE != ''
-        run: npx tauri build --target ${{ matrix.rust-target }}
+      # ----- Build Tauri (release) -----
+      - name: Build Tauri application
+        shell: bash
+        run: |
+          # Unset empty signing env vars to prevent Tauri from attempting import
+          [ -z "${APPLE_CERTIFICATE:-}" ] && unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_TEAM_ID || true
+          [ -z "${WINDOWS_CERTIFICATE:-}" ] && unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD || true
+          npx tauri build --target ${{ matrix.rust-target }}
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
-
-      # ----- Build Tauri (release) - macOS unsigned (ad-hoc) -----
-      - name: Build Tauri application (unsigned macOS)
-        if: runner.os == 'macOS' && secrets.APPLE_CERTIFICATE == ''
-        run: npx tauri build --target ${{ matrix.rust-target }}
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
 
       # ----- Collect artifacts -----
       - name: Collect binaries for packaging
