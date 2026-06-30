@@ -1,4 +1,5 @@
 # Nexus Core
+<img width="1912" height="948" alt="image" src="https://github.com/user-attachments/assets/11021fae-7e7c-437b-ac9c-7054b5b05359" />
 
 桌面网络代理管理工具 — 面向 IT 专业人员与网络工程师的高性能桌面客户端。
 
